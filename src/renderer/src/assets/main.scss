@@ -1,0 +1,133 @@
+/* ---------- 主题变量 ---------- */
+:root,
+[data-theme='light'] {
+  --bg: #eef1f5;
+  --panel: #ffffff;
+  --border: #dde1e7;
+  --text: #1f2937;
+  --text-dim: #6b7280;
+  --accent: #3b82f6;
+}
+
+[data-theme='dark'] {
+  --bg: #111827;
+  --panel: #1f2937;
+  --border: #374151;
+  --text: #f3f4f6;
+  --text-dim: #9ca3af;
+  --accent: #60a5fa;
+}
+
+/* ---------- 基础 ---------- */
+* {
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  font-family: 'Microsoft YaHei', 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+  overflow: hidden;
+}
+
+button {
+  font-family: inherit;
+}
+
+.btn {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+
+  &:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  &.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+
+    &:hover:not(:disabled) {
+      filter: brightness(1.1);
+    }
+  }
+}
+
+/* ---------- 滚动条 ---------- */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.35);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------- 打印 ---------- */
+@media print {
+  body {
+    overflow: visible;
+  }
+
+  .app-header,
+  .palette-panel,
+  .property-panel,
+  .zoom-bar,
+  .export-overlay,
+  .toast {
+    display: none !important;
+  }
+
+  .app-shell,
+  .app-body,
+  .editor-wrap {
+    display: block !important;
+    height: auto !important;
+    background: #fff !important;
+  }
+
+  .viewport {
+    overflow: visible !important;
+    padding: 0 !important;
+    display: block !important;
+  }
+
+  .pages-column {
+    width: auto !important;
+  }
+
+  .page-scaler {
+    width: auto !important;
+    height: auto !important;
+    margin-bottom: 0 !important;
+  }
+
+  .resume-page {
+    box-shadow: none !important;
+    page-break-after: always;
+    break-after: page;
+
+    &:last-child {
+      page-break-after: auto;
+      break-after: auto;
+    }
+  }
+}
