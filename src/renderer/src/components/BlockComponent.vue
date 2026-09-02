@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import type { ResumeBlock } from '../types/resume'
+import { computed, nextTick, ref, watch } from 'vue'
+import type { PersonalField, ResumeBlock } from '../types/resume'
 import { useResumeStore } from '../stores/resumeStore'
 import { useDragDrop, type ResizeDir } from '../composables/useDragDrop'
+import { genId } from '../utils/blocks'
 
 const props = withDefaults(defineProps<{ block: ResumeBlock; pageOffset?: number }>(), {
   pageOffset: 0
@@ -15,6 +16,55 @@ const HANDLES: ResizeDir[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 const isSelected = computed(() => store.selectedId === props.block.id)
 const isEditing = computed(() => store.editingId === props.block.id)
 
+const rootRef = ref<HTMLElement | null>(null)
+
+/**
+ * 编辑模式下的虚拟高度：仅参与渲染，绝不写入 block.height、
+ * 不触发任何下推，因此编辑框不会与下方组件产生位置交互
+ * （不挤压排版，退出编辑后也不留空洞）。
+ */
+const editHeight = ref<number | null>(null)
+
+/** 个人信息中的头部字段（姓名 / 职位，按顺序展示） */
+const headFields = computed<PersonalField[]>(() => {
+  const fields = props.block.content?.fields
+  if (!Array.isArray(fields)) return []
+  return fields.filter((f: PersonalField) => f.kind !== 'info' && f.value)
+})
+
+/** 个人信息中的普通信息行（kind === 'info'） */
+const infoFields = computed<PersonalField[]>(() => {
+  const fields = props.block.content?.fields
+  if (!Array.isArray(fields)) return []
+  return fields.filter((f: PersonalField) => f.kind === 'info' && (f.value || f.label))
+})
+
+/* ---------- 编辑框虚拟高度 ---------- */
+
+/** 测量编辑表单的自然高度，更新虚拟编辑高度（只增不减） */
+async function updateEditHeight(): Promise<void> {
+  await nextTick()
+  const el = rootRef.value
+  if (!el || !isEditing.value) return
+  const prevHeight = el.style.height
+  el.style.height = 'auto'
+  const natural = el.scrollHeight
+  el.style.height = prevHeight
+  const fit = natural + 2
+  if (editHeight.value === null || fit > editHeight.value) {
+    editHeight.value = Math.max(props.block.height, fit)
+  }
+}
+
+// 双击进入编辑：虚拟撑开以容纳完整表单；退出编辑：立即恢复原高度
+watch(isEditing, (editing) => {
+  if (editing) {
+    updateEditHeight()
+  } else {
+    editHeight.value = null
+  }
+})
+
 const blockStyle = computed(() => {
   const s = props.block.style
   const bw = s.borderWidth ?? 0
@@ -23,7 +73,8 @@ const blockStyle = computed(() => {
     // block.y 是贯穿多页的连续坐标，渲染时减去所在页的偏移
     top: props.block.y - props.pageOffset + 'px',
     width: props.block.width + 'px',
-    height: props.block.height + 'px',
+    // 编辑时使用虚拟高度（浮层效果），数据高度保持不变
+    height: (isEditing.value && editHeight.value !== null ? editHeight.value : props.block.height) + 'px',
     zIndex: props.block.zIndex,
     background: s.backgroundColor,
     border: `${bw}px solid ${s.borderColor ?? 'transparent'}`,
@@ -67,7 +118,12 @@ function onPointerDown(e: PointerEvent): void {
     getTargets: collectSnapTargets,
     onGuides,
     onEnd: (changed) => {
-      if (!changed) store.discardSnapshot()
+      if (!changed) {
+        store.discardSnapshot()
+      } else {
+        // 拖拽落位后若与下方组件重合，自动下推
+        store.pushDownOverlapped(props.block.id)
+      }
     }
   })
 }
@@ -76,6 +132,10 @@ function onResizeStart(e: PointerEvent, dir: ResizeDir): void {
   store.select(props.block.id)
   store.snapshot()
   startResize(e, props.block, dir, {
+    getTargets: collectSnapTargets,
+    onGuides,
+    // 拉大边框的过程中实时下推重合的下方组件
+    onChange: () => store.pushDownOverlapped(props.block.id),
     onEnd: (changed) => {
       if (!changed) store.discardSnapshot()
     }
@@ -114,11 +174,13 @@ function addItem(): void {
       c.items.push({ name: '', date: '' })
       break
   }
+  updateEditHeight()
 }
 
 function removeItem(index: number): void {
   const c = props.block.content
   if (Array.isArray(c.items)) c.items.splice(index, 1)
+  updateEditHeight()
 }
 
 const newTag = ref('')
@@ -129,15 +191,33 @@ function addTag(): void {
   if (!Array.isArray(props.block.content.tags)) props.block.content.tags = []
   props.block.content.tags.push(value)
   newTag.value = ''
+  updateEditHeight()
 }
 
 function removeTag(index: number): void {
   props.block.content.tags.splice(index, 1)
+  updateEditHeight()
+}
+
+/* ---------- 个人信息字段的增删 ---------- */
+
+function addField(): void {
+  const c = props.block.content
+  if (!Array.isArray(c.fields)) c.fields = []
+  c.fields.push({ id: genId(), kind: 'info', label: '', value: '' })
+  updateEditHeight()
+}
+
+function removeField(index: number): void {
+  const c = props.block.content
+  if (Array.isArray(c.fields)) c.fields.splice(index, 1)
+  updateEditHeight()
 }
 </script>
 
 <template>
   <div
+    ref="rootRef"
     class="block"
     :class="{ selected: isSelected && !store.isExporting, editing: isEditing }"
     :style="blockStyle"
@@ -150,12 +230,14 @@ function removeTag(index: number): void {
     <!-- ======== 展示模式 ======== -->
     <div v-if="!isEditing" class="block-body">
       <template v-if="block.type === 'personal'">
-        <div class="personal-name">{{ block.content.name }}</div>
-        <div class="personal-job">{{ block.content.jobTitle }}</div>
-        <div class="personal-contact">
-          <span v-if="block.content.phone">📞 {{ block.content.phone }}</span>
-          <span v-if="block.content.email">✉️ {{ block.content.email }}</span>
-          <span v-if="block.content.address">📍 {{ block.content.address }}</span>
+        <template v-for="f in headFields" :key="f.id">
+          <div v-if="f.kind === 'name'" class="personal-name">{{ f.value }}</div>
+          <div v-else class="personal-job">{{ f.value }}</div>
+        </template>
+        <div v-if="infoFields.length" class="personal-contact">
+          <span v-for="f in infoFields" :key="f.id">
+            <template v-if="f.label">{{ f.label }}：</template>{{ f.value }}
+          </span>
         </div>
       </template>
 
@@ -164,7 +246,7 @@ function removeTag(index: number): void {
       </template>
 
       <template v-else-if="block.type === 'experience'">
-        <div v-for="(item, i) in block.content.items" :key="i" class="entry">
+        <div v-for="(item, i) in (block.content.items as any[])" :key="i" class="entry">
           <div class="entry-head">
             <strong>{{ item.company }}</strong>
             <span class="entry-period">{{ item.period }}</span>
@@ -175,7 +257,7 @@ function removeTag(index: number): void {
       </template>
 
       <template v-else-if="block.type === 'education'">
-        <div v-for="(item, i) in block.content.items" :key="i" class="entry">
+        <div v-for="(item, i) in (block.content.items as any[])" :key="i" class="entry">
           <div class="entry-head">
             <strong>{{ item.school }}</strong>
             <span class="entry-period">{{ item.period }}</span>
@@ -186,12 +268,12 @@ function removeTag(index: number): void {
 
       <template v-else-if="block.type === 'skills'">
         <div class="tag-list">
-          <span v-for="(tag, i) in block.content.tags" :key="i" class="tag">{{ tag }}</span>
+          <span v-for="(tag, i) in (block.content.tags as any[])" :key="i" class="tag">{{ tag }}</span>
         </div>
       </template>
 
       <template v-else-if="block.type === 'project'">
-        <div v-for="(item, i) in block.content.items" :key="i" class="entry">
+        <div v-for="(item, i) in (block.content.items as any[])" :key="i" class="entry">
           <div class="entry-head">
             <strong>{{ item.name }}</strong>
             <span class="entry-period">{{ item.period }}</span>
@@ -202,7 +284,7 @@ function removeTag(index: number): void {
       </template>
 
       <template v-else-if="block.type === 'certificate'">
-        <div v-for="(item, i) in block.content.items" :key="i" class="entry-head cert-row">
+        <div v-for="(item, i) in (block.content.items as any[])" :key="i" class="entry-head cert-row">
           <span>🏅 {{ item.name }}</span>
           <span class="entry-period">{{ item.date }}</span>
         </div>
@@ -214,11 +296,17 @@ function removeTag(index: number): void {
       <input v-model="block.title" class="edit-title" placeholder="区块标题" />
 
       <template v-if="block.type === 'personal'">
-        <label>姓名<input v-model="block.content.name" /></label>
-        <label>职位<input v-model="block.content.jobTitle" /></label>
-        <label>电话<input v-model="block.content.phone" /></label>
-        <label>邮箱<input v-model="block.content.email" /></label>
-        <label>地址<input v-model="block.content.address" /></label>
+        <div v-for="(f, i) in (block.content.fields as PersonalField[])" :key="f.id" class="field-row">
+          <select v-model="f.kind" class="field-kind" title="字段类型">
+            <option value="name">姓名</option>
+            <option value="title">职位</option>
+            <option value="info">信息</option>
+          </select>
+          <input v-model="f.label" class="field-label" placeholder="标签，如 微信" />
+          <input v-model="f.value" class="field-value" placeholder="内容" />
+          <button class="mini danger field-remove" title="删除该信息" @click="removeField(i)">×</button>
+        </div>
+        <button class="mini" @click="addField">＋ 添加信息</button>
       </template>
 
       <template v-else-if="block.type === 'summary' || block.type === 'custom'">
@@ -226,7 +314,7 @@ function removeTag(index: number): void {
       </template>
 
       <template v-else-if="block.type === 'experience'">
-        <div v-for="(item, i) in block.content.items" :key="i" class="item-form">
+        <div v-for="(item, i) in (block.content.items as any[])" :key="i" class="item-form">
           <div class="item-form-head">
             <span>经历 {{ i + 1 }}</span>
             <button class="mini danger" @click="removeItem(i)">删除</button>
@@ -240,7 +328,7 @@ function removeTag(index: number): void {
       </template>
 
       <template v-else-if="block.type === 'education'">
-        <div v-for="(item, i) in block.content.items" :key="i" class="item-form">
+        <div v-for="(item, i) in (block.content.items as any[])" :key="i" class="item-form">
           <div class="item-form-head">
             <span>教育 {{ i + 1 }}</span>
             <button class="mini danger" @click="removeItem(i)">删除</button>
@@ -255,7 +343,7 @@ function removeTag(index: number): void {
 
       <template v-else-if="block.type === 'skills'">
         <div class="tag-edit-list">
-          <span v-for="(tag, i) in block.content.tags" :key="i" class="tag editable">
+          <span v-for="(tag, i) in (block.content.tags as any[])" :key="i" class="tag editable">
             {{ tag }}
             <button class="tag-remove" @click="removeTag(i)">×</button>
           </span>
@@ -267,7 +355,7 @@ function removeTag(index: number): void {
       </template>
 
       <template v-else-if="block.type === 'project'">
-        <div v-for="(item, i) in block.content.items" :key="i" class="item-form">
+        <div v-for="(item, i) in (block.content.items as any[])" :key="i" class="item-form">
           <div class="item-form-head">
             <span>项目 {{ i + 1 }}</span>
             <button class="mini danger" @click="removeItem(i)">删除</button>
@@ -281,7 +369,7 @@ function removeTag(index: number): void {
       </template>
 
       <template v-else-if="block.type === 'certificate'">
-        <div v-for="(item, i) in block.content.items" :key="i" class="item-form">
+        <div v-for="(item, i) in (block.content.items as any[])" :key="i" class="item-form">
           <div class="item-form-head">
             <span>证书 {{ i + 1 }}</span>
             <button class="mini danger" @click="removeItem(i)">删除</button>
@@ -335,6 +423,9 @@ function removeTag(index: number): void {
     overflow: auto;
     z-index: 9999 !important;
     outline: 2px solid var(--accent);
+    /* 编辑框是覆盖在下方组件之上的虚拟浮层，兜底不透明背景避免透出下层内容 */
+    background: var(--panel) !important;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
   }
 }
 
@@ -572,5 +663,38 @@ function removeTag(index: number): void {
 .tag-add {
   display: flex;
   gap: 6px;
+}
+
+/* 个人信息动态字段行 */
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+  .field-kind {
+    width: 64px;
+    flex-shrink: 0;
+    padding: 4px 4px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--panel);
+    color: var(--text);
+    font-size: 12px;
+  }
+
+  .field-label {
+    width: 90px;
+    flex-shrink: 0;
+  }
+
+  .field-value {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .field-remove {
+    flex-shrink: 0;
+    padding: 3px 8px;
+  }
 }
 </style>

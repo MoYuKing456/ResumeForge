@@ -21,12 +21,18 @@ export interface BlockStyle {
   titleColor?: string
 }
 
+/** 个人信息字段：姓名 / 职位为特殊展示样式，info 为普通联系信息行 */
+export interface PersonalField {
+  id: string
+  kind: 'name' | 'title' | 'info'
+  /** 字段标签，如「电话」「微信」「个人主页」 */
+  label: string
+  value: string
+}
+
 export interface PersonalContent {
-  name: string
-  jobTitle: string
-  phone: string
-  email: string
-  address: string
+  /** 自由增删的信息字段列表 */
+  fields: PersonalField[]
 }
 
 export interface SummaryContent {

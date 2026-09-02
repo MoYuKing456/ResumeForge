@@ -1,4 +1,4 @@
-import type { BlockType, ResumeBlock, ResumeData } from '../types/resume'
+import type { BlockType, PersonalField, ResumeBlock, ResumeData } from '../types/resume'
 import { BLOCK_TYPE_LABELS } from '../types/resume'
 
 let counter = 0
@@ -12,13 +12,15 @@ export function genId(): string {
 const DEFAULTS: Record<BlockType, { width: number; height: number; content: () => any }> = {
   personal: {
     width: 720,
-    height: 120,
+    height: 140,
     content: () => ({
-      name: '张三',
-      jobTitle: '前端工程师',
-      phone: '138-0000-0000',
-      email: 'zhangsan@example.com',
-      address: '广东省深圳市'
+      fields: [
+        { id: genId(), kind: 'name', label: '姓名', value: '张三' },
+        { id: genId(), kind: 'title', label: '职位', value: '前端工程师' },
+        { id: genId(), kind: 'info', label: '电话', value: '138-0000-0000' },
+        { id: genId(), kind: 'info', label: '邮箱', value: 'zhangsan@example.com' },
+        { id: genId(), kind: 'info', label: '地址', value: '广东省深圳市' }
+      ]
     })
   },
   summary: {
@@ -89,6 +91,34 @@ const DEFAULTS: Record<BlockType, { width: number; height: number; content: () =
     height: 140,
     content: () => ({ text: '在这里输入自定义内容。' })
   }
+}
+
+/** 旧版个人信息（固定字段）迁移为 fields 动态结构，兼容历史存档 */
+export function migratePersonalContent(content: any): { fields: PersonalField[] } {
+  if (content && Array.isArray(content.fields)) return content
+  const fields: PersonalField[] = []
+  const push = (kind: PersonalField['kind'], label: string, value: unknown): void => {
+    if (value !== undefined && value !== null && String(value) !== '') {
+      fields.push({ id: genId(), kind, label, value: String(value) })
+    }
+  }
+  push('name', '姓名', content?.name)
+  push('title', '职位', content?.jobTitle)
+  push('info', '电话', content?.phone)
+  push('info', '邮箱', content?.email)
+  push('info', '地址', content?.address)
+  if (fields.length === 0) {
+    fields.push({ id: genId(), kind: 'name', label: '姓名', value: '' })
+  }
+  return { fields }
+}
+
+/** 载入存档时对区块做版本迁移 */
+export function migrateBlock(block: ResumeBlock): ResumeBlock {
+  if (block.type === 'personal') {
+    block.content = migratePersonalContent(block.content)
+  }
+  return block
 }
 
 /** 创建一个新区块 */

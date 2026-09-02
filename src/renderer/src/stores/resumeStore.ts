@@ -1,6 +1,9 @@
 import { defineStore } from 'pinia'
 import type { BlockType, PageSettings, ResumeBlock, ResumeData } from '../types/resume'
-import { buildTemplate, createBlock, genId, type TemplateName } from '../utils/blocks'
+import { buildTemplate, createBlock, genId, migrateBlock, type TemplateName } from '../utils/blocks'
+
+/** 区块之间的默认垂直间距 */
+const BLOCK_GAP = 8
 
 const MAX_HISTORY = 50
 
@@ -96,13 +99,73 @@ export const useResumeStore = defineStore('resume', {
 
     addBlock(type: BlockType, x?: number, y?: number): void {
       this.snapshot()
-      // 未指定位置时无缝追加到内容最底部（可能自动落到新的一页）
-      const defaultY = this.blocks.length > 0 ? this.contentBottom + 16 : 40
-      const block = createBlock(type, x ?? 37, y ?? defaultY)
+      const block = createBlock(type, x ?? 37, y ?? 40)
+      if (x === undefined && y === undefined) {
+        // 未指定位置时：与最底部的上方组件保持同宽、左对齐，并紧贴其下方
+        const above = [...this.blocks].sort(
+          (a, b) => b.y + b.height - (a.y + a.height)
+        )[0]
+        if (above) {
+          block.x = above.x
+          block.width = above.width
+          block.y = above.y + above.height + BLOCK_GAP
+        } else {
+          block.x = 37
+          block.y = 40
+        }
+      }
       block.zIndex = this.nextZ()
       this.blocks.push(block)
       this.selectedId = block.id
       this.editingId = null
+      // 拖拽落点与现有组件重合时，自动下推被压住的组件
+      this.pushDownOverlapped(block.id)
+    },
+
+    /**
+     * 防重合：只把与上方组件真正发生垂直重叠（且水平重叠）的下方组件往下推。
+     * 采用位移传播：被撞组件的下移量会传递给更下方的组件，
+     * 因此原本排好（贴合或自定义间距）的组件间距保持不变，
+     * 绝不会把没有重合的组件撑出空隙。
+     * anchorId 为刚被改动的组件，它本身不会被推动。
+     */
+    pushDownOverlapped(anchorId?: string): void {
+      const dy = new Map<string, number>()
+      for (const b of this.blocks) dy.set(b.id, 0)
+
+      let changed = true
+      let guard = 0
+      while (changed && guard++ < 30) {
+        changed = false
+        const posY = (b: ResumeBlock): number => b.y + (dy.get(b.id) ?? 0)
+        const sorted = [...this.blocks].sort((a, b) => posY(a) - posY(b) || a.x - b.x)
+        for (let i = 0; i < sorted.length; i++) {
+          for (let j = i + 1; j < sorted.length; j++) {
+            const a = sorted[i]
+            const b = sorted[j]
+            if (b.id === anchorId) continue
+            const hOverlap =
+              Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)
+            if (hOverlap <= 0) continue
+            // 真正重叠的量（基于 a 下移后的底边）
+            const overlap = posY(a) + a.height - posY(b)
+            if (overlap > 0) {
+              // 取"消除重叠所需位移"与"上方组件已发生的位移"的较大者：
+              // 前者保证不重合，后者把位移传播下去以保持原始间距
+              const push = Math.max(overlap, dy.get(a.id) ?? 0)
+              if (push > (dy.get(b.id) ?? 0)) {
+                dy.set(b.id, push)
+                changed = true
+              }
+            }
+          }
+        }
+      }
+
+      for (const b of this.blocks) {
+        const d = dy.get(b.id) ?? 0
+        if (d > 0) b.y += d
+      }
     },
 
     /** 方向键微调选中区块（连续按键合并为一条历史记录） */
@@ -142,6 +205,7 @@ export const useResumeStore = defineStore('resume', {
       copy.zIndex = this.nextZ()
       this.blocks.push(copy)
       this.selectedId = copy.id
+      this.pushDownOverlapped(copy.id)
     },
 
     select(id: string | null): void {
@@ -170,6 +234,10 @@ export const useResumeStore = defineStore('resume', {
       if (!block) return
       this.snapshot()
       Object.assign(block, patch)
+      // 几何属性变化后，自动下推发生重合的下方组件
+      if ('x' in patch || 'y' in patch || 'width' in patch || 'height' in patch) {
+        this.pushDownOverlapped(id)
+      }
     },
 
     patchBlockStyle(id: string, style: Partial<ResumeBlock['style']>): void {
@@ -194,7 +262,7 @@ export const useResumeStore = defineStore('resume', {
       if (!data || !Array.isArray(data.blocks) || !data.pageSettings) {
         throw new Error('无效的简历数据')
       }
-      this.blocks = data.blocks
+      this.blocks = data.blocks.map((b) => migrateBlock(b))
       this.pageSettings = data.pageSettings
       this.selectedId = null
       this.editingId = null

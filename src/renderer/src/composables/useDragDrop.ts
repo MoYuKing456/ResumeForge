@@ -4,6 +4,8 @@ export type ResizeDir = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
 
 export interface DragHooks {
   onStart?: () => void
+  /** 每次位移/尺寸变化后实时回调 */
+  onChange?: () => void
   onEnd?: (changed: boolean) => void
 }
 
@@ -17,7 +19,7 @@ export interface SnapHooks {
 const MIN_WIDTH = 120
 const MIN_HEIGHT = 60
 /** 吸附阈值（画布坐标 px） */
-const SNAP_THRESHOLD = 6
+const SNAP_THRESHOLD = 10
 
 interface SnapCandidate {
   delta: number
@@ -73,24 +75,32 @@ export function useDragDrop(getScale: () => number) {
           [nextX, nextX + block.width / 2, nextX + block.width],
           targets.v
         )
-        if (snapX) {
-          nextX += snapX.delta
-          guideV.push(snapX.line)
-        }
+        if (snapX) nextX += snapX.delta
         // 水平方向吸附：比较区块的上 / 中 / 下三条边
         const snapY = findSnap(
           [nextY, nextY + block.height / 2, nextY + block.height],
           targets.h
         )
+        if (snapY) nextY += snapY.delta
+        // 吸附后收集所有与边线重合的候选线，全部显示为辅助线
+        if (snapX) {
+          const edgesX = [nextX, nextX + block.width / 2, nextX + block.width]
+          for (const t of targets.v) {
+            if (edgesX.some((e) => Math.abs(e - t) < 0.5)) guideV.push(t)
+          }
+        }
         if (snapY) {
-          nextY += snapY.delta
-          guideH.push(snapY.line)
+          const edgesY = [nextY, nextY + block.height / 2, nextY + block.height]
+          for (const t of targets.h) {
+            if (edgesY.some((e) => Math.abs(e - t) < 0.5)) guideH.push(t)
+          }
         }
       }
 
       block.x = Math.max(0, Math.round(nextX))
       block.y = Math.max(0, Math.round(nextY))
       hooks.onGuides?.(guideV, guideH)
+      hooks.onChange?.()
     }
 
     const onUp = (): void => {
@@ -108,7 +118,7 @@ export function useDragDrop(getScale: () => number) {
     e: PointerEvent,
     block: ResumeBlock,
     dir: ResizeDir,
-    hooks: DragHooks = {}
+    hooks: DragHooks & SnapHooks = {}
   ): void {
     e.preventDefault()
     e.stopPropagation()
@@ -139,6 +149,44 @@ export function useDragDrop(getScale: () => number) {
         y = orig.y + dy
       }
 
+      const guideV: number[] = []
+      const guideH: number[] = []
+
+      // 缩放的移动边缘同样参与吸附（与其他组件的边线/中线对齐贴合）
+      const targets = hooks.getTargets?.()
+      if (targets) {
+        if (dir.includes('e')) {
+          const snap = findSnap([x + w], targets.v)
+          if (snap) {
+            w += snap.delta
+            guideV.push(snap.line)
+          }
+        }
+        if (dir.includes('w')) {
+          const snap = findSnap([x], targets.v)
+          if (snap) {
+            x += snap.delta
+            w -= snap.delta
+            guideV.push(snap.line)
+          }
+        }
+        if (dir.includes('s')) {
+          const snap = findSnap([y + h], targets.h)
+          if (snap) {
+            h += snap.delta
+            guideH.push(snap.line)
+          }
+        }
+        if (dir.includes('n')) {
+          const snap = findSnap([y], targets.h)
+          if (snap) {
+            y += snap.delta
+            h -= snap.delta
+            guideH.push(snap.line)
+          }
+        }
+      }
+
       // 保证最小尺寸，且左上角不被最小尺寸约束"推走"
       if (w < MIN_WIDTH) {
         if (dir.includes('w')) x -= MIN_WIDTH - w
@@ -153,11 +201,14 @@ export function useDragDrop(getScale: () => number) {
       block.y = Math.max(0, Math.round(y))
       block.width = Math.round(w)
       block.height = Math.round(h)
+      hooks.onGuides?.(guideV, guideH)
+      hooks.onChange?.()
     }
 
     const onUp = (): void => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      hooks.onGuides?.([], [])
       hooks.onEnd?.(changed)
     }
 
