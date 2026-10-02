@@ -1,5 +1,6 @@
-import { BrowserWindow, dialog, ipcMain } from 'electron'
-import { readFile, writeFile } from 'fs/promises'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { mkdir, readFile, unlink, writeFile } from 'fs/promises'
+import { dirname, join } from 'path'
 
 /**
  * 注册所有 IPC 处理器。
@@ -77,5 +78,54 @@ export function registerIpc(): void {
     })
     if (canceled || filePaths.length === 0) return null
     return await readFile(filePaths[0], 'utf-8')
+  })
+
+  /* ---------- 草稿备份（自动保存的未完成简历） ---------- */
+
+  /** 获取草稿存储目录：开发环境为项目根目录/drafts，生产环境为 exe 同级/drafts */
+  function getDraftDir(): string {
+    let base: string
+    if (app.isPackaged) {
+      // 生产环境：exe 所在目录
+      base = dirname(app.getPath('exe'))
+    } else {
+      // 开发环境：项目根目录
+      base = app.getAppPath()
+    }
+    return join(base, 'drafts')
+  }
+
+  const DRAFT_FILE = 'draft.json'
+
+  /** 保存草稿到文件系统（静默，不弹对话框） */
+  ipcMain.handle('draft:save', async (_event, payload: { json: string }) => {
+    try {
+      const dir = getDraftDir()
+      await mkdir(dir, { recursive: true })
+      await writeFile(join(dir, DRAFT_FILE), payload.json, 'utf-8')
+      return join(dir, DRAFT_FILE)
+    } catch {
+      return null
+    }
+  })
+
+  /** 恢复草稿（读取并删除，实现"一次性"语义） */
+  ipcMain.handle('draft:restore', async () => {
+    try {
+      const filePath = join(getDraftDir(), DRAFT_FILE)
+      const json = await readFile(filePath, 'utf-8')
+      await unlink(filePath)
+      return json
+    } catch {
+      return null
+    }
+  })
+
+  /** 打开草稿文件夹（资源管理器） */
+  ipcMain.handle('draft:openFolder', async () => {
+    const dir = getDraftDir()
+    await mkdir(dir, { recursive: true })
+    shell.openPath(dir)
+    return dir
   })
 }

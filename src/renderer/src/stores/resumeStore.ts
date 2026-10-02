@@ -284,6 +284,16 @@ export const useResumeStore = defineStore('resume', {
       this.blocks = []
       this.selectedId = null
       this.editingId = null
+    },
+
+    /** 清空所有内容（不记录历史，用于初始化） */
+    resetAll(): void {
+      this.blocks = []
+      this.pageSettings = { width: 794, height: 1123, backgroundColor: '#ffffff' }
+      this.selectedId = null
+      this.editingId = null
+      this.past = []
+      this.future = []
     }
   }
 })

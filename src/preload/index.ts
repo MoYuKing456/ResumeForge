@@ -11,7 +11,14 @@ const api = {
   saveResume: (json: string): Promise<string | null> =>
     ipcRenderer.invoke('resume:save', { json }),
   /** 打开简历 JSON，返回文件内容 */
-  loadResume: (): Promise<string | null> => ipcRenderer.invoke('resume:load')
+  loadResume: (): Promise<string | null> => ipcRenderer.invoke('resume:load'),
+  /** 保存草稿到文件系统（静默，不弹对话框） */
+  saveDraft: (json: string): Promise<string | null> =>
+    ipcRenderer.invoke('draft:save', { json }),
+  /** 恢复草稿（读取并删除，一次性语义） */
+  restoreDraft: (): Promise<string | null> => ipcRenderer.invoke('draft:restore'),
+  /** 打开草稿文件夹 */
+  openDraftFolder: (): Promise<string> => ipcRenderer.invoke('draft:openFolder')
 }
 
 export type RendererApi = typeof api

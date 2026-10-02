@@ -2,11 +2,11 @@ import { watch } from 'vue'
 import { useResumeStore } from '../stores/resumeStore'
 import type { ResumeData } from '../types/resume'
 
-const AUTOSAVE_KEY = 'resume-builder-autosave'
-
 /**
  * 简历数据管理：
- * - 本地自动保存（localStorage，防抖 800ms）
+ * - 草稿自动备份到文件系统（防抖 800ms），用户可通过文件管理器找到
+ * - 启动时一次性恢复草稿（恢复后自动删除文件）
+ * - 无草稿时以空简历启动
  * - 通过 IPC 与文件系统互导 JSON
  */
 export function useResumeData() {
@@ -20,9 +20,10 @@ export function useResumeData() {
         clearTimeout(timer)
         timer = setTimeout(() => {
           try {
-            localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(store.serialize()))
+            const json = JSON.stringify(store.serialize())
+            window.api?.saveDraft(json)
           } catch {
-            /* 存储满等异常忽略 */
+            /* 异常忽略 */
           }
         }, 800)
       },
@@ -30,18 +31,19 @@ export function useResumeData() {
     )
   }
 
-  /** 启动时恢复上次编辑内容；没有则加载默认模板 */
-  function restoreOrInit(): void {
-    const saved = localStorage.getItem(AUTOSAVE_KEY)
-    if (saved) {
-      try {
+  /** 启动时恢复上次编辑内容；没有则以空简历启动 */
+  async function restoreOrInit(): Promise<void> {
+    try {
+      const saved = await window.api?.restoreDraft()
+      if (saved) {
         store.loadData(JSON.parse(saved) as ResumeData)
         return
-      } catch {
-        localStorage.removeItem(AUTOSAVE_KEY)
       }
+    } catch {
+      /* 草稿文件损坏则忽略 */
     }
-    store.applyTemplate('classic')
+    // 无草稿：空简历
+    store.resetAll()
   }
 
   async function saveToFile(): Promise<string | null> {
@@ -65,5 +67,9 @@ export function useResumeData() {
     return true
   }
 
-  return { startAutoSave, restoreOrInit, saveToFile, loadFromFile }
+  async function openDraftFolder(): Promise<void> {
+    await window.api?.openDraftFolder()
+  }
+
+  return { startAutoSave, restoreOrInit, saveToFile, loadFromFile, openDraftFolder }
 }

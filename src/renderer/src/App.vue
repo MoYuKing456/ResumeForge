@@ -8,7 +8,7 @@ import PropertyPanel from './components/PropertyPanel.vue'
 import ExportPanel from './components/ExportPanel.vue'
 
 const store = useResumeStore()
-const { startAutoSave, restoreOrInit, saveToFile, loadFromFile } = useResumeData()
+const { startAutoSave, restoreOrInit, saveToFile, loadFromFile, openDraftFolder } = useResumeData()
 
 const showExport = ref(false)
 const toast = ref('')
@@ -40,6 +40,11 @@ async function onOpen(): Promise<void> {
   } catch {
     notify('打开失败：文件格式不正确')
   }
+}
+
+async function onOpenDraftFolder(): Promise<void> {
+  await openDraftFolder()
+  notify('已打开草稿文件夹')
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -106,6 +111,8 @@ onBeforeUnmount(() => {
         <button class="btn" @click="toggleTheme">
           {{ store.theme === 'light' ? '🌙 暗色' : '☀️ 亮色' }}
         </button>
+        <span class="divider"></span>
+        <button class="btn" title="打开草稿存档文件夹" @click="onOpenDraftFolder">📁 草稿</button>
       </div>
     </header>
 
