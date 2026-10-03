@@ -2,13 +2,15 @@ import { nextTick } from 'vue'
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import { useResumeStore } from '../stores/resumeStore'
+import { buildResumePlainText } from '../utils/plainText'
 
 /**
  * 导出逻辑：
  * - 截图直接渲染编辑画布本身（每一页一个 .resume-page 元素），所见即所得
  * - 导出前清空选中态/编辑态/辅助线并隐藏网格线，保证像素级还原
- * - 图片：每页导出为一个文件（自动加 _p2、_p3 后缀）
+ * - PNG：每页导出为一个文件（自动加 _p2、_p3 后缀）
  * - PDF：所有页合并为一个多页 A4 PDF
+ * - 复制：按阅读顺序把当前编辑内容编排为纯文本写入系统剪切板
  */
 export function useExport() {
   const store = useResumeStore()
@@ -51,20 +53,18 @@ export function useExport() {
     a.click()
   }
 
-  /** 导出 PNG / JPEG：每页一个文件，返回保存路径描述 */
-  async function exportImage(format: 'png' | 'jpeg'): Promise<string | null> {
+  /** 导出 PNG：每页一个文件，返回保存路径描述 */
+  async function exportImage(): Promise<string | null> {
     const canvases = await capturePages()
-    const mime = format === 'png' ? 'image/png' : 'image/jpeg'
-    const dataUrls = canvases.map((c) => c.toDataURL(mime, 0.92))
+    const dataUrls = canvases.map((c) => c.toDataURL('image/png'))
 
     if (window.api?.saveImage) {
-      return window.api.saveImage(format, dataUrls)
+      return window.api.saveImage(dataUrls)
     }
-    const ext = format === 'png' ? 'png' : 'jpg'
     dataUrls.forEach((url, i) => {
-      downloadDataUrl(url, i === 0 ? `resume.${ext}` : `resume_p${i + 1}.${ext}`)
+      downloadDataUrl(url, i === 0 ? 'resume.png' : `resume_p${i + 1}.png`)
     })
-    return dataUrls.length > 1 ? `${dataUrls.length} 个文件已下载` : `resume.${ext}`
+    return dataUrls.length > 1 ? `${dataUrls.length} 个文件已下载` : 'resume.png'
   }
 
   /** 导出 PDF：所有页合并为一个 A4 多页文档 */
@@ -108,5 +108,29 @@ export function useExport() {
     setTimeout(restore, 1000)
   }
 
-  return { exportImage, exportPdf, printResume }
+  /** 复制为纯文本：把当前编辑内容按阅读顺序编排后写入系统剪切板 */
+  async function copyPlainText(): Promise<void> {
+    const plain = buildResumePlainText(store.serialize())
+    if (!plain.trim()) throw new Error('简历内容为空，无法复制')
+
+    if (window.api?.copyText) {
+      await window.api.copyText(plain)
+      return
+    }
+    // 浏览器降级方案
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(plain)
+      return
+    }
+    const textarea = document.createElement('textarea')
+    textarea.value = plain
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+  }
+
+  return { exportImage, exportPdf, printResume, copyPlainText }
 }

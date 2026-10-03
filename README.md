@@ -29,8 +29,8 @@
 
 ### 导出与打印
 - **PNG**：2x 高清位图，多页自动生成 `_p2`、`_p3` 后缀文件
-- **JPEG**：体积更小，适合分享
 - **PDF**：所有页合并为一个 A4 多页文档
+- **复制文本**：把当前编辑内容按阅读顺序编排为纯文本写入系统剪贴板，可直接粘贴到聊天软件或普通文本编辑器
 - **打印**：调用系统打印对话框，以 100% 缩放逐页分页打印
 - 导出内容与编辑画布**完全一致**（导出前自动清除选中态 / 编辑态 / 辅助线，像素级还原）
 
@@ -83,7 +83,7 @@ ResumeForge/
 │       │   │   └── ExportPanel.vue     # 导出对话框
 │       │   ├── composables/      # 组合式函数
 │       │   │   ├── useResumeData.ts    # 自动保存 / JSON 互导
-│       │   │   ├── useExport.ts        # 导出 PNG / JPEG / PDF / 打印
+│       │   │   ├── useExport.ts        # 导出 PNG / PDF / 复制文本 / 打印
 │       │   │   └── useDragDrop.ts      # 拖拽 / 缩放 / 对齐吸附
 │       │   ├── stores/resumeStore.ts   # Pinia 状态（历史记录、区块、页面）
 │       │   ├── types/resume.ts         # 类型定义

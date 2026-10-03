@@ -7,7 +7,7 @@ const emit = defineEmits<{
   done: [message: string]
 }>()
 
-const { exportImage, exportPdf, printResume } = useExport()
+const { exportImage, exportPdf, printResume, copyPlainText } = useExport()
 
 const busy = ref(false)
 const status = ref('')
@@ -33,6 +33,24 @@ async function run(task: () => Promise<string | null>, successPrefix: string): P
   }
 }
 
+/** 复制为纯文本：直接读取当前编辑数据，无需渲染 */
+async function onCopy(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  status.value = '正在复制，请稍候…'
+  try {
+    await copyPlainText()
+    status.value = ''
+    emit('done', '简历已复制为纯文本，可直接粘贴分享')
+    emit('close')
+  } catch (err) {
+    console.error(err)
+    status.value = '复制失败，请查看控制台'
+  } finally {
+    busy.value = false
+  }
+}
+
 async function onPrint(): Promise<void> {
   emit('close')
   await printResume()
@@ -46,17 +64,17 @@ async function onPrint(): Promise<void> {
       <p class="desc">导出内容与编辑画布完全一致（2x 高清渲染）</p>
 
       <div class="export-options">
-        <button class="export-btn" :disabled="busy" @click="run(() => exportImage('png'), 'PNG 已导出')">
+        <button class="export-btn" :disabled="busy" @click="run(() => exportImage(), 'PNG 已导出')">
           <span class="fmt">PNG</span>
           <span class="fmt-desc">透明支持 · 高清位图</span>
-        </button>
-        <button class="export-btn" :disabled="busy" @click="run(() => exportImage('jpeg'), 'JPEG 已导出')">
-          <span class="fmt">JPEG</span>
-          <span class="fmt-desc">体积更小 · 适合分享</span>
         </button>
         <button class="export-btn" :disabled="busy" @click="run(() => exportPdf(), 'PDF 已导出')">
           <span class="fmt">PDF</span>
           <span class="fmt-desc">A4 排版 · 投递首选</span>
+        </button>
+        <button class="export-btn" :disabled="busy" @click="onCopy">
+          <span class="fmt">复制文本</span>
+          <span class="fmt-desc">纯文本 · 粘贴到聊天/编辑器</span>
         </button>
         <button class="export-btn" :disabled="busy" @click="onPrint">
           <span class="fmt">打印</span>

@@ -1,12 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 const api = {
-  /** 保存图片（每页一个 dataURL），返回保存路径；用户取消返回 null */
-  saveImage: (format: 'png' | 'jpeg', dataUrls: string[]): Promise<string | null> =>
-    ipcRenderer.invoke('export:image', { format, dataUrls }),
+  /** 保存 PNG 图片（每页一个 dataURL），返回保存路径；用户取消返回 null */
+  saveImage: (dataUrls: string[]): Promise<string | null> =>
+    ipcRenderer.invoke('export:image', { dataUrls }),
   /** 保存 PDF，buffer 为 jsPDF 输出的 ArrayBuffer */
   savePdf: (buffer: ArrayBuffer): Promise<string | null> =>
     ipcRenderer.invoke('export:pdf', { buffer }),
+  /** 把纯文本写入系统剪贴板 */
+  copyText: (text: string): Promise<boolean> =>
+    ipcRenderer.invoke('clipboard:writeText', { text }),
   /** 保存简历 JSON */
   saveResume: (json: string): Promise<string | null> =>
     ipcRenderer.invoke('resume:save', { json }),
