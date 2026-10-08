@@ -161,7 +161,7 @@ export const TEMPLATE_LABELS: Record<TemplateName, string> = {
 }
 
 function basePage(backgroundColor: string): ResumeData['pageSettings'] {
-  return { width: 794, height: 1123, backgroundColor }
+  return { width: 794, height: 1123, backgroundColor, contentPageGap: 32 }
 }
 
 export function buildTemplate(name: TemplateName): ResumeData {

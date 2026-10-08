@@ -1,9 +1,11 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { useResumeStore } from '../stores/resumeStore'
 import { BLOCK_TYPE_LABELS, type BlockType } from '../types/resume'
 import { TEMPLATE_LABELS, type TemplateName } from '../utils/blocks'
 
 const store = useResumeStore()
+const confirmation = ref<{ message: string; action: () => void } | null>(null)
 
 const BLOCK_TYPES = Object.keys(BLOCK_TYPE_LABELS) as BlockType[]
 const TEMPLATES = Object.keys(TEMPLATE_LABELS) as TemplateName[]
@@ -25,14 +27,27 @@ function onDragStart(e: DragEvent, type: BlockType): void {
 }
 
 function onTemplate(name: TemplateName): void {
-  if (store.blocks.length > 0 && !window.confirm(`应用「${TEMPLATE_LABELS[name]}」模板将替换当前全部区块（可撤销），继续吗？`)) {
+  if (store.blocks.length > 0) {
+    confirmation.value = {
+      message: `应用「${TEMPLATE_LABELS[name]}」模板将替换当前全部区块（可撤销），继续吗？`,
+      action: () => store.applyTemplate(name)
+    }
     return
   }
   store.applyTemplate(name)
 }
 
 function onClear(): void {
-  if (window.confirm('清空画布上的所有区块？（可撤销）')) store.clearAll()
+  confirmation.value = {
+    message: '清空画布上的所有区块？（可撤销）',
+    action: () => store.clearAll()
+  }
+}
+
+function confirmAction(): void {
+  const action = confirmation.value?.action
+  confirmation.value = null
+  action?.()
 }
 </script>
 
@@ -67,6 +82,15 @@ function onClear(): void {
 
     <div class="panel-section">
       <button class="clear-btn" @click="onClear">🗑 清空画布</button>
+    </div>
+    <div v-if="confirmation" class="confirm-overlay" @click.self="confirmation = null">
+      <section class="confirm-dialog" role="dialog" aria-modal="true" aria-label="确认操作">
+        <p>{{ confirmation.message }}</p>
+        <div class="confirm-actions">
+          <button class="btn" @click="confirmation = null">取消</button>
+          <button class="btn primary" @click="confirmAction">确认</button>
+        </div>
+      </section>
     </div>
   </aside>
 </template>
@@ -163,5 +187,37 @@ function onClear(): void {
   &:hover {
     background: rgba(239, 68, 68, 0.08);
   }
+}
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.38);
+}
+
+.confirm-dialog {
+  width: min(360px, calc(100vw - 40px));
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.24);
+
+  p {
+    margin: 0;
+    line-height: 1.6;
+  }
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
 }
 </style>

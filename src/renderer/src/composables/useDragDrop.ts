@@ -6,12 +6,23 @@ export interface DragHooks {
   onStart?: () => void
   /** 每次位移/尺寸变化后实时回调 */
   onChange?: () => void
-  onEnd?: (changed: boolean) => void
+  onEnd?: (changed: boolean, snappedBlockIds?: string[]) => void
+  constrainDelta?: (dx: number, dy: number) => { dx: number; dy: number }
+}
+
+export interface SnapTarget {
+  line: number
+  blockIds: string[]
+}
+
+interface SnapTargets {
+  v: SnapTarget[]
+  h: SnapTarget[]
 }
 
 export interface SnapHooks {
-  /** 返回吸附候选线：v 为垂直线（x 值），h 为水平线（y 值），画布坐标系 */
-  getTargets?: () => { v: number[]; h: number[] }
+  /** 返回吸附候选线及所属板块：v 为 x 轴线，h 为 y 轴线 */
+  getTargets?: () => SnapTargets
   /** 拖拽过程中实时回调当前命中的辅助线 */
   onGuides?: (v: number[], h: number[]) => void
 }
@@ -24,16 +35,17 @@ const SNAP_THRESHOLD = 10
 interface SnapCandidate {
   delta: number
   line: number
+  blockIds: string[]
 }
 
 /** 在一组候选线中找离被拖拽边缘最近且在阈值内的吸附 */
-function findSnap(edges: number[], targets: number[]): SnapCandidate | null {
+function findSnap(edges: number[], targets: SnapTarget[]): SnapCandidate | null {
   let best: SnapCandidate | null = null
   for (const edge of edges) {
     for (const target of targets) {
-      const delta = target - edge
+      const delta = target.line - edge
       if (Math.abs(delta) <= SNAP_THRESHOLD && (!best || Math.abs(delta) < Math.abs(best.delta))) {
-        best = { delta, line: target }
+        best = { delta, line: target.line, blockIds: target.blockIds }
       }
     }
   }
@@ -45,60 +57,103 @@ function findSnap(edges: number[], targets: number[]): SnapCandidate | null {
  * 所有计算都在画布（未缩放）坐标系中进行，getScale 用于把屏幕位移换算为画布位移。
  */
 export function useDragDrop(getScale: () => number) {
-  function startDrag(e: PointerEvent, block: ResumeBlock, hooks: DragHooks & SnapHooks = {}): void {
+  function startDrag(
+    e: PointerEvent,
+    block: ResumeBlock,
+    hooks: DragHooks & SnapHooks = {},
+    group: ResumeBlock[] = [block]
+  ): void {
     e.preventDefault()
     e.stopPropagation()
 
     const scale = getScale()
     const startX = e.clientX
     const startY = e.clientY
-    const origX = block.x
-    const origY = block.y
+    const originals = group.map((member) => ({ member, x: member.x, y: member.y }))
+    const bounds = {
+      left: Math.min(...group.map((member) => member.x)),
+      top: Math.min(...group.map((member) => member.y)),
+      right: Math.max(...group.map((member) => member.x + member.width)),
+      bottom: Math.max(...group.map((member) => member.y + member.height))
+    }
     let moved = false
+    let snappedBlockIds: string[] = []
 
     hooks.onStart?.()
 
     const onMove = (ev: PointerEvent): void => {
       const dx = (ev.clientX - startX) / scale
       const dy = (ev.clientY - startY) / scale
-      if (Math.abs(dx) + Math.abs(dy) > 1) moved = true
-
-      let nextX = origX + dx
-      let nextY = origY + dy
+      let nextX = bounds.left + dx
+      let nextY = bounds.top + dy
       const guideV: number[] = []
       const guideH: number[] = []
+      let snapX: SnapCandidate | null = null
+      let snapY: SnapCandidate | null = null
 
       const targets = hooks.getTargets?.()
       if (targets) {
         // 垂直方向吸附：比较区块的左 / 中 / 右三条边
-        const snapX = findSnap(
-          [nextX, nextX + block.width / 2, nextX + block.width],
+        snapX = findSnap(
+          [nextX, (bounds.left + bounds.right) / 2 + dx, bounds.right + dx],
           targets.v
         )
-        if (snapX) nextX += snapX.delta
+        if (snapX) {
+          nextX += snapX.delta
+        }
         // 水平方向吸附：比较区块的上 / 中 / 下三条边
-        const snapY = findSnap(
-          [nextY, nextY + block.height / 2, nextY + block.height],
+        snapY = findSnap(
+          [nextY, (bounds.top + bounds.bottom) / 2 + dy, bounds.bottom + dy],
           targets.h
         )
-        if (snapY) nextY += snapY.delta
-        // 吸附后收集所有与边线重合的候选线，全部显示为辅助线
-        if (snapX) {
-          const edgesX = [nextX, nextX + block.width / 2, nextX + block.width]
-          for (const t of targets.v) {
-            if (edgesX.some((e) => Math.abs(e - t) < 0.5)) guideV.push(t)
-          }
-        }
         if (snapY) {
-          const edgesY = [nextY, nextY + block.height / 2, nextY + block.height]
-          for (const t of targets.h) {
-            if (edgesY.some((e) => Math.abs(e - t) < 0.5)) guideH.push(t)
-          }
+          nextY += snapY.delta
         }
       }
 
-      block.x = Math.max(0, Math.round(nextX))
-      block.y = Math.max(0, Math.round(nextY))
+      // 约束吸附后的最终位移，避免吸附越过上方组件的底边。
+      const constrained = hooks.constrainDelta?.(nextX - bounds.left, nextY - bounds.top)
+      if (constrained) {
+        nextX = bounds.left + constrained.dx
+        nextY = bounds.top + constrained.dy
+      }
+
+      const appliedX = Math.max(0, Math.round(nextX)) - bounds.left
+      const appliedY = Math.max(0, Math.round(nextY)) - bounds.top
+      // 只显示最终仍然对齐的辅助线；边界约束取消吸附时不留下误导线。
+      const snappedIds = new Set<string>()
+      if (targets && snapX) {
+        const edgesX = [
+          bounds.left + appliedX,
+          (bounds.left + bounds.right) / 2 + appliedX,
+          bounds.right + appliedX
+        ]
+        for (const target of targets.v) {
+          if (edgesX.some((edge) => Math.abs(edge - target.line) < 0.5)) {
+            guideV.push(target.line)
+            target.blockIds.forEach((id) => snappedIds.add(id))
+          }
+        }
+      }
+      if (targets && snapY) {
+        const edgesY = [
+          bounds.top + appliedY,
+          (bounds.top + bounds.bottom) / 2 + appliedY,
+          bounds.bottom + appliedY
+        ]
+        for (const target of targets.h) {
+          if (edgesY.some((edge) => Math.abs(edge - target.line) < 0.5)) {
+            guideH.push(target.line)
+            target.blockIds.forEach((id) => snappedIds.add(id))
+          }
+        }
+      }
+      snappedBlockIds = [...snappedIds]
+      if (Math.abs(appliedX) + Math.abs(appliedY) > 1) moved = true
+      for (const original of originals) {
+        original.member.x = original.x + appliedX
+        original.member.y = original.y + appliedY
+      }
       hooks.onGuides?.(guideV, guideH)
       hooks.onChange?.()
     }
@@ -107,7 +162,7 @@ export function useDragDrop(getScale: () => number) {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       hooks.onGuides?.([], [])
-      hooks.onEnd?.(moved)
+      hooks.onEnd?.(moved, snappedBlockIds)
     }
 
     window.addEventListener('pointermove', onMove)

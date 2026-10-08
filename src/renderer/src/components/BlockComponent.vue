@@ -2,11 +2,12 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import type { PersonalField, ResumeBlock } from '../types/resume'
 import { useResumeStore } from '../stores/resumeStore'
-import { useDragDrop, type ResizeDir } from '../composables/useDragDrop'
+import { useDragDrop, type ResizeDir, type SnapTarget } from '../composables/useDragDrop'
 import { genId } from '../utils/blocks'
 
-const props = withDefaults(defineProps<{ block: ResumeBlock; pageOffset?: number }>(), {
-  pageOffset: 0
+const props = withDefaults(defineProps<{ block: ResumeBlock; pageOffset?: number; pageIndex?: number }>(), {
+  pageOffset: 0,
+  pageIndex: 0
 })
 const store = useResumeStore()
 const { startDrag, startResize } = useDragDrop(() => store.zoom)
@@ -17,6 +18,7 @@ const isSelected = computed(() => store.selectedId === props.block.id)
 const isEditing = computed(() => store.editingId === props.block.id)
 
 const rootRef = ref<HTMLElement | null>(null)
+const contextMenu = ref<{ x: number; y: number } | null>(null)
 
 /**
  * 编辑模式下的虚拟高度：仅参与渲染，绝不写入 block.height、
@@ -68,14 +70,39 @@ watch(isEditing, (editing) => {
 const blockStyle = computed(() => {
   const s = props.block.style
   const bw = s.borderWidth ?? 0
+  const pageHeight = store.pageSettings.height
+  const contentGap = Math.min(
+    store.pageSettings.contentPageGap ?? 32,
+    Math.floor((pageHeight - 1) / 2)
+  )
+  const startPage = Math.floor(props.block.y / pageHeight)
+  const continuedPages = Math.max(0, props.pageIndex - startPage)
+  const fragmentTop =
+    props.block.y - props.pageOffset + continuedPages * 2 * contentGap
+  const sourceEnd =
+    (props.pageIndex + 1) * pageHeight - 2 * continuedPages * contentGap - contentGap
+  const continuesAfter = props.block.y + props.block.height > sourceEnd
+  const fragmentTopInset = continuedPages > 0 ? Math.max(0, contentGap - fragmentTop) : 0
+  const renderedHeight =
+    isEditing.value && editHeight.value !== null ? editHeight.value : props.block.height
+  const fragmentBottomInset = continuesAfter
+    ? Math.max(0, fragmentTop + renderedHeight - (pageHeight - contentGap))
+    : 0
+  const editWidth =
+    isEditing.value && ['experience', 'project'].includes(props.block.type)
+      ? Math.max(props.block.width, store.pageSettings.width - props.block.x - 24)
+      : props.block.width
   return {
     left: props.block.x + 'px',
     // block.y 是贯穿多页的连续坐标，渲染时减去所在页的偏移
-    top: props.block.y - props.pageOffset + 'px',
-    width: props.block.width + 'px',
+    top: fragmentTop + 'px',
+    width: editWidth + 'px',
     // 编辑时使用虚拟高度（浮层效果），数据高度保持不变
     height: (isEditing.value && editHeight.value !== null ? editHeight.value : props.block.height) + 'px',
     zIndex: props.block.zIndex,
+    clipPath: isEditing.value
+      ? 'none'
+      : `inset(${fragmentTopInset}px 0 ${fragmentBottomInset}px 0)`,
     background: s.backgroundColor,
     border: `${bw}px solid ${s.borderColor ?? 'transparent'}`,
     borderRadius: (s.borderRadius ?? 0) + 'px',
@@ -93,15 +120,68 @@ const titleStyle = computed(() => ({
 /* ---------- 拖拽 / 缩放（带对齐吸附） ---------- */
 
 /** 收集吸附候选线：其他区块的边线/中线 + 页面垂直中线 */
-function collectSnapTargets(): { v: number[]; h: number[] } {
-  const v: number[] = [store.pageSettings.width / 2]
-  const h: number[] = []
+function collectSnapTargets(excludedIds = dragGroup().map((b) => b.id)): { v: SnapTarget[]; h: SnapTarget[] } {
+  const v: SnapTarget[] = [{ line: store.pageSettings.width / 2, blockIds: [] }]
+  const h: SnapTarget[] = []
+  const movingIds = new Set(excludedIds)
+  const visitedGroups = new Set<string>()
   for (const b of store.blocks) {
-    if (b.id === props.block.id) continue
-    v.push(b.x, b.x + b.width / 2, b.x + b.width)
-    h.push(b.y, b.y + b.height / 2, b.y + b.height)
+    if (movingIds.has(b.id)) continue
+
+    let members = [b]
+    if (b.groupId) {
+      if (visitedGroups.has(b.groupId)) continue
+      visitedGroups.add(b.groupId)
+      members = store.blocks.filter(
+        (member) => member.groupId === b.groupId && !movingIds.has(member.id)
+      )
+      if (members.length === 0) continue
+    }
+
+    const left = Math.min(...members.map((member) => member.x))
+    const top = Math.min(...members.map((member) => member.y))
+    const right = Math.max(...members.map((member) => member.x + member.width))
+    const bottom = Math.max(...members.map((member) => member.y + member.height))
+    const blockIds = members.map((member) => member.id)
+    v.push(
+      { line: left, blockIds },
+      { line: (left + right) / 2, blockIds },
+      { line: right, blockIds }
+    )
+    h.push(
+      { line: top, blockIds },
+      { line: (top + bottom) / 2, blockIds },
+      { line: bottom, blockIds }
+    )
   }
   return { v, h }
+}
+
+function dragGroup(): ResumeBlock[] {
+  const id = props.block.groupId
+  return id ? store.blocks.filter((b) => b.groupId === id) : [props.block]
+}
+
+function constrainUpward(
+  dx: number,
+  dy: number,
+  origins: Map<string, { x: number; y: number }>
+): { dx: number; dy: number } {
+  const members = dragGroup()
+  const memberIds = new Set(members.map((b) => b.id))
+  let minDy = -Math.min(...members.map((b) => origins.get(b.id)?.y ?? b.y))
+  for (const member of members) {
+    const origin = origins.get(member.id) ?? member
+    const nextX = origin.x + dx
+    for (const other of store.blocks) {
+      if (memberIds.has(other.id)) continue
+      const overlapsX = Math.min(nextX + member.width, other.x + other.width) - Math.max(nextX, other.x)
+      if (overlapsX > 0 && other.y + other.height <= origin.y) {
+        minDy = Math.max(minDy, other.y + other.height - origin.y)
+      }
+    }
+  }
+  return { dx, dy: Math.max(dy, minDy) }
 }
 
 function onGuides(v: number[], h: number[]): void {
@@ -109,30 +189,53 @@ function onGuides(v: number[], h: number[]): void {
 }
 
 function onPointerDown(e: PointerEvent): void {
-  if (isEditing.value) return
   const target = e.target as HTMLElement
-  if (target.closest('.block-actions, .resize-handle')) return
+  // 表单控件必须保留浏览器默认聚焦行为，不能进入画布拖拽逻辑。
+  if (target.closest('.block-editor, input, textarea, select, button, .block-actions, .resize-handle')) return
+  if (isEditing.value || e.button !== 0) return
+  store.reconcileBlockGroups()
   store.select(props.block.id)
   store.snapshot()
+  const group = dragGroup()
+  const groupIds = group.map((b) => b.id)
+  const origins = new Map(group.map((b) => [b.id, { x: b.x, y: b.y }]))
   startDrag(e, props.block, {
-    getTargets: collectSnapTargets,
+    getTargets: () => collectSnapTargets(groupIds),
     onGuides,
-    onEnd: (changed) => {
+    constrainDelta: (dx, dy) => constrainUpward(dx, dy, origins),
+    onEnd: (changed, snappedBlockIds = []) => {
       if (!changed) {
         store.discardSnapshot()
       } else {
         // 拖拽落位后若与下方组件重合，自动下推
-        store.pushDownOverlapped(props.block.id)
+        store.pushDownOverlapped(groupIds)
+        if (snappedBlockIds.length) {
+          store.mergeBlockGroups([...groupIds, ...snappedBlockIds])
+        }
       }
     }
-  })
+  }, group)
+}
+
+function onContextMenu(e: MouseEvent): void {
+  store.reconcileBlockGroups()
+  if (!props.block.groupId || isEditing.value || store.isExporting) return
+  e.preventDefault()
+  contextMenu.value = { x: e.clientX, y: e.clientY }
+}
+
+function detachAndMove(): void {
+  store.detachBlockGroup(props.block.id)
+  contextMenu.value = null
+  store.select(props.block.id)
 }
 
 function onResizeStart(e: PointerEvent, dir: ResizeDir): void {
+  store.reconcileBlockGroups()
   store.select(props.block.id)
   store.snapshot()
   startResize(e, props.block, dir, {
-    getTargets: collectSnapTargets,
+    getTargets: () => collectSnapTargets([props.block.id]),
     onGuides,
     // 拉大边框的过程中实时下推重合的下方组件
     onChange: () => store.pushDownOverlapped(props.block.id),
@@ -223,6 +326,7 @@ function removeField(index: number): void {
     :style="blockStyle"
     @pointerdown="onPointerDown"
     @click.stop
+    @contextmenu="onContextMenu"
     @dblclick.stop="enterEdit"
   >
     <div class="block-title" :style="titleStyle">{{ block.title }}</div>
@@ -317,12 +421,16 @@ function removeField(index: number): void {
         <div v-for="(item, i) in (block.content.items as any[])" :key="i" class="item-form">
           <div class="item-form-head">
             <span>经历 {{ i + 1 }}</span>
-            <button class="mini danger" @click="removeItem(i)">删除</button>
+            <div class="item-controls">
+              <button class="mini" :disabled="i === 0" title="上移" @click="store.moveItem(block.id, i, -1)">↑</button>
+              <button class="mini" :disabled="i === block.content.items.length - 1" title="下移" @click="store.moveItem(block.id, i, 1)">↓</button>
+              <button class="mini danger" @click="removeItem(i)">删除</button>
+            </div>
           </div>
           <input v-model="item.company" placeholder="公司" />
           <input v-model="item.role" placeholder="职位" />
           <input v-model="item.period" placeholder="时间段，如 2021.03 - 至今" />
-          <textarea v-model="item.description" rows="2" placeholder="工作描述"></textarea>
+          <textarea v-model="item.description" rows="3" placeholder="工作描述" @input="updateEditHeight"></textarea>
         </div>
         <button class="mini" @click="addItem">＋ 添加经历</button>
       </template>
@@ -358,12 +466,16 @@ function removeField(index: number): void {
         <div v-for="(item, i) in (block.content.items as any[])" :key="i" class="item-form">
           <div class="item-form-head">
             <span>项目 {{ i + 1 }}</span>
-            <button class="mini danger" @click="removeItem(i)">删除</button>
+            <div class="item-controls">
+              <button class="mini" :disabled="i === 0" title="上移" @click="store.moveItem(block.id, i, -1)">↑</button>
+              <button class="mini" :disabled="i === block.content.items.length - 1" title="下移" @click="store.moveItem(block.id, i, 1)">↓</button>
+              <button class="mini danger" @click="removeItem(i)">删除</button>
+            </div>
           </div>
           <input v-model="item.name" placeholder="项目名称" />
           <input v-model="item.role" placeholder="担任角色" />
           <input v-model="item.period" placeholder="时间段" />
-          <textarea v-model="item.description" rows="2" placeholder="项目描述"></textarea>
+          <textarea v-model="item.description" rows="3" placeholder="项目描述" @input="updateEditHeight"></textarea>
         </div>
         <button class="mini" @click="addItem">＋ 添加项目</button>
       </template>
@@ -400,6 +512,17 @@ function removeField(index: number): void {
       ></div>
     </template>
   </div>
+  <Teleport to="body">
+    <div
+      v-if="contextMenu"
+      class="block-context-menu"
+      :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+      @pointerdown.stop
+    >
+      <button @click="detachAndMove">单独移动</button>
+      <button class="menu-dismiss" @click="contextMenu = null">取消</button>
+    </div>
+  </Teleport>
 </template>
 
 <style lang="scss" scoped>
@@ -473,7 +596,7 @@ function removeField(index: number): void {
 
 /* 经历条目 */
 .entry {
-  margin-bottom: 10px;
+  margin-bottom: 14px;
 
   &:last-child {
     margin-bottom: 0;
@@ -592,6 +715,17 @@ function removeField(index: number): void {
     color: var(--text);
     font-size: 12px;
     font-family: inherit;
+    pointer-events: auto;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  textarea {
+    min-height: 76px;
+    resize: vertical;
+    field-sizing: content;
+    line-height: 1.5;
+    font-size: 13px;
   }
 
   .edit-title {
@@ -616,6 +750,11 @@ function removeField(index: number): void {
   color: var(--text-dim);
 }
 
+.item-controls {
+  display: flex;
+  gap: 4px;
+}
+
 .mini {
   padding: 3px 10px;
   border: 1px solid var(--border);
@@ -624,6 +763,11 @@ function removeField(index: number): void {
   color: var(--text);
   font-size: 12px;
   cursor: pointer;
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
 
   &.danger {
     color: #ef4444;
@@ -637,6 +781,32 @@ function removeField(index: number): void {
     position: sticky;
     bottom: 0;
   }
+}
+
+.block-context-menu {
+  position: fixed;
+  z-index: 20000;
+  display: flex;
+  flex-direction: column;
+  min-width: 112px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+
+  button {
+    padding: 7px 10px;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+
+    &:hover { background: var(--bg); }
+  }
+
+  .menu-dismiss { color: var(--text-dim); }
 }
 
 .tag-edit-list {

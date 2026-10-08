@@ -12,8 +12,49 @@ import { buildResumePlainText } from '../utils/plainText'
  * - PDF：所有页合并为一个多页 A4 PDF
  * - 复制：按阅读顺序把当前编辑内容编排为纯文本写入系统剪切板
  */
-export function useExport() {
+export function useExport(): {
+  exportImage: () => Promise<string | null>
+  exportPdf: () => Promise<string | null>
+  printResume: () => Promise<void>
+  copyPlainText: () => Promise<void>
+} {
   const store = useResumeStore()
+
+  /** html2canvas 不支持 clip-path；用真正的溢出裁剪容器还原跨页片段。 */
+  function applyPageFragmentClips(page: HTMLElement): void {
+    for (const block of Array.from(page.querySelectorAll<HTMLElement>('.block'))) {
+      const match = block.style.clipPath.match(/^inset\((.*)\)$/)
+      if (!match) continue
+
+      const insets = match[1].trim().split(/\s+/).map((value) => Number.parseFloat(value))
+      if (insets.length < 1 || insets.some((value) => !Number.isFinite(value))) continue
+      const top = insets[0]
+      const bottom = insets.length <= 2 ? top : insets[2]
+      if (top <= 0 && bottom <= 0) continue
+
+      const x = Number.parseFloat(block.style.left)
+      const y = Number.parseFloat(block.style.top)
+      const width = Number.parseFloat(block.style.width)
+      const height = Number.parseFloat(block.style.height)
+      if (![x, y, width, height].every(Number.isFinite)) continue
+
+      const wrapper = page.ownerDocument.createElement('div')
+      Object.assign(wrapper.style, {
+        position: 'absolute',
+        left: `${x}px`,
+        top: `${y + top}px`,
+        width: `${width}px`,
+        height: `${Math.max(0, height - top - bottom)}px`,
+        overflow: 'hidden',
+        zIndex: block.style.zIndex
+      })
+      block.style.left = '0px'
+      block.style.top = `${-top}px`
+      block.style.clipPath = 'none'
+      block.parentElement?.replaceChild(wrapper, block)
+      wrapper.appendChild(block)
+    }
+  }
 
   /** 逐页捕获画布为 Canvas（2x 高清） */
   async function capturePages(pixelRatio = 2): Promise<HTMLCanvasElement[]> {
@@ -35,7 +76,14 @@ export function useExport() {
             scale: pixelRatio,
             useCORS: true,
             backgroundColor: bg,
-            logging: false
+            logging: false,
+            onclone: (clonedDocument) => {
+              const pageIndex = el.dataset.index
+              const clonedPage = pageIndex
+                ? clonedDocument.querySelector<HTMLElement>(`.resume-page[data-index="${pageIndex}"]`)
+                : null
+              if (clonedPage) applyPageFragmentClips(clonedPage)
+            }
           })
         )
       }

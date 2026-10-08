@@ -49,6 +49,12 @@ function patchPageColor(value: string): void {
   store.patchPageSettings({ backgroundColor: value })
 }
 
+function patchContentPageGap(value: number): void {
+  if (Number.isNaN(value)) return
+  const max = Math.floor((store.pageSettings.height - 1) / 2)
+  store.patchPageSettings({ contentPageGap: Math.max(0, Math.min(120, max, Math.round(value))) })
+}
+
 function setPageSize(width: number, height: number): void {
   store.patchPageSettings({ width, height })
 }
@@ -127,6 +133,22 @@ function setPageSize(width: number, height: number): void {
       </div>
       <p class="empty-hint">点击画布中的区块可编辑其属性</p>
     </template>
+    <div class="group page-gap-setting">
+      <h4>跨页内容</h4>
+      <div class="row">
+        <label class="full">
+          跨页内容留白（px）
+          <input
+            type="number"
+            min="0"
+            :max="Math.min(120, Math.floor((store.pageSettings.height - 1) / 2))"
+            step="4"
+            :value="Math.min(store.pageSettings.contentPageGap ?? 32, Math.floor((store.pageSettings.height - 1) / 2))"
+            @change="patchContentPageGap(+($event.target as HTMLInputElement).value)"
+          />
+        </label>
+      </div>
+    </div>
   </aside>
 </template>
 

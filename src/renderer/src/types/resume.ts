@@ -75,6 +75,8 @@ export interface CustomContent {
 
 export interface ResumeBlock {
   id: string
+  /** 共享该标识的区块作为一个整体拖动；缺省表示独立区块 */
+  groupId?: string
   type: BlockType
   /** 区块标题，如「工作经历」 */
   title: string
@@ -95,6 +97,8 @@ export interface PageSettings {
   width: number
   height: number
   backgroundColor: string
+  /** 同一板块跨页时，分页边缘留给内容的空白，不参与页面尺寸和导出 */
+  contentPageGap?: number
 }
 
 export interface ResumeData {

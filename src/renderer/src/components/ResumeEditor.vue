@@ -7,13 +7,14 @@ import BlockComponent from './BlockComponent.vue'
 const store = useResumeStore()
 const viewportRef = ref<HTMLElement | null>(null)
 
-/** 页面之间的可视间距（仅视觉，坐标空间是连续的） */
-const PAGE_GAP = 24
-
 /** 打印/导出时强制 100% 缩放，保证输出尺寸精确 */
 const effectiveZoom = computed(() => (store.isExporting ? 1 : store.zoom))
 
 const pageH = computed(() => store.pageSettings.height)
+const contentGap = computed(() =>
+  Math.min(store.pageSettings.contentPageGap ?? 32, Math.floor((pageH.value - 1) / 2))
+)
+const PAGE_GAP = 24
 
 const pages = computed(() => Array.from({ length: store.pageCount }, (_, i) => i))
 
@@ -42,9 +43,19 @@ function scalerStyle(index: number): Record<string, string> {
   }
 }
 
-/** 某一页上的区块（按区块左上角所属页分配） */
+/** 返回内容范围与当前页相交的区块，包括跨页延续部分。 */
 function blocksOnPage(index: number) {
-  return store.sortedBlocks.filter((b) => Math.floor(b.y / pageH.value) === index)
+  const height = pageH.value
+  const gap = contentGap.value
+  return store.sortedBlocks.filter((block) => {
+    const startPage = Math.floor(block.y / height)
+    if (index < startPage) return false
+    const continuedPages = index - startPage
+    const rangeStart =
+      continuedPages === 0 ? startPage * height : index * height - 2 * continuedPages * gap + gap
+    const rangeEnd = (index + 1) * height - 2 * continuedPages * gap - gap
+    return block.y < rangeEnd && block.y + block.height > rangeStart
+  })
 }
 
 function pageOffset(index: number): number {
@@ -125,9 +136,10 @@ function onBlankPointerDown(): void {
           >
             <BlockComponent
               v-for="block in blocksOnPage(i)"
-              :key="block.id"
+              :key="`${block.id}-page-${i}`"
               :block="block"
               :page-offset="pageOffset(i)"
+              :page-index="i"
             />
           </div>
         </div>
